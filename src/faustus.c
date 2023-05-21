@@ -513,61 +513,6 @@ static ssize_t charge_control_end_threshold_show(struct device *device,
 
 static DEVICE_ATTR_RW(charge_control_end_threshold);
 
-static int asus_wmi_battery_add(struct power_supply *battery)
-{
-	/* The WMI method does not provide a way to specific a battery, so we
-	 * just assume it is the first battery.
-	 * Note: On some newer ASUS laptops (Zenbook UM431DA), the primary/first
-	 * battery is named BATT.
-	 */
-	if (strcmp(battery->desc->name, "BAT0") != 0 &&
-	    strcmp(battery->desc->name, "BAT1") != 0 &&
-	    strcmp(battery->desc->name, "BATC") != 0 &&
-	    strcmp(battery->desc->name, "BATT") != 0)
-		return -ENODEV;
-
-	if (device_create_file(&battery->dev,
-	    &dev_attr_charge_control_end_threshold))
-		return -ENODEV;
-
-	/* The charge threshold is only reset when the system is power cycled,
-	 * and we can't get the current threshold so let set it to 100% when
-	 * a battery is added.
-	 */
-	asus_wmi_set_devstate(ASUS_WMI_DEVID_RSOC, 100, NULL);
-	charge_end_threshold = 100;
-
-	return 0;
-}
-
-static int asus_wmi_battery_remove(struct power_supply *battery)
-{
-	device_remove_file(&battery->dev,
-			   &dev_attr_charge_control_end_threshold);
-	return 0;
-}
-
-static struct acpi_battery_hook battery_hook = {
-	.add_battery = asus_wmi_battery_add,
-	.remove_battery = asus_wmi_battery_remove,
-	.name = "ASUS Battery Extension",
-};
-
-static void asus_wmi_battery_init(struct asus_wmi *asus)
-{
-	asus->battery_rsoc_available = false;
-	if (asus_wmi_dev_is_present(asus, ASUS_WMI_DEVID_RSOC)) {
-		asus->battery_rsoc_available = true;
-		battery_hook_register(&battery_hook);
-	}
-}
-
-static void asus_wmi_battery_exit(struct asus_wmi *asus)
-{
-	if (asus->battery_rsoc_available)
-		battery_hook_unregister(&battery_hook);
-}
-
 /* LEDs ***********************************************************************/
 
 /*
@@ -3107,14 +3052,6 @@ static int asus_wmi_add(struct platform_device *pdev)
 	/* Some Asus desktop boards export an acpi-video backlight interface,
 	   stop this from showing up */
 	chassis_type = dmi_get_system_info(DMI_CHASSIS_TYPE);
-	if (chassis_type && !strcmp(chassis_type, "3"))
-		acpi_video_set_dmi_backlight_type(acpi_backlight_vendor);
-
-	if (asus->driver->quirks->wmi_backlight_power)
-		acpi_video_set_dmi_backlight_type(acpi_backlight_vendor);
-
-	if (asus->driver->quirks->wmi_backlight_native)
-		acpi_video_set_dmi_backlight_type(acpi_backlight_native);
 
 	if (asus->driver->quirks->xusb2pr)
 		asus_wmi_set_xusb2pr(asus);
@@ -3138,8 +3075,6 @@ static int asus_wmi_add(struct platform_device *pdev)
 		err = -ENODEV;
 		goto fail_wmi_handler;
 	}
-
-	asus_wmi_battery_init(asus);
 
 	asus_wmi_debugfs_init(asus);
 
@@ -3180,7 +3115,6 @@ static int asus_wmi_remove(struct platform_device *device)
 	asus_wmi_debugfs_exit(asus);
 	asus_wmi_sysfs_exit(asus->platform_device);
 	asus_fan_set_auto(asus);
-	asus_wmi_battery_exit(asus);
 
 	kfree(asus);
 	return 0;
@@ -3424,6 +3358,13 @@ static const struct dmi_system_id atw_dmi_list[] __initconst = {
 		},
 	},
 	{
+		.callback = dmi_check_callback,
+		.ident = "FX506IU",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "ASUSTeK COMPUTER INC."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "FX506IU"),
+		},
+	},	{
 		.callback = dmi_check_callback,
 		.ident = "FX506LI",
 		.matches = {
